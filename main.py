@@ -21,9 +21,11 @@ from scipy.optimize import curve_fit
 import os
 from physics.indentation import IndentationProblem
 from physics.vessel import VesselProblem
-
+from physics.emtmd_EH import EMTMDEHProblem
+from physics.emtmd import EMTMDProblem
 # Import visualization utilities
 from visualization.plotting import save_predictions_csv, save_vessel_design_csv, save_vessel_epoch_results_csv, plot_force_indentation, plot_loss_curves, evaluate_rank
+
 
 # Set output root directory from environment variable or default
 OUTPUT_ROOT = os.environ.get("OUTPUT_ROOT", "results")
@@ -172,7 +174,7 @@ def train(problem, bounds, data_path,
         history['constraint'].append(constraint.item())
         
         # Store epoch results for vessel problem - save if predictions changed or every 10 epochs
-        if isinstance(problem, VesselProblem):
+        if isinstance(problem, VesselProblem) or isinstance(problem, EMTMDProblem) or isinstance(problem, EMTMDEHProblem):
             predictions_np = predictions.detach().cpu().numpy().copy()  # numpy copy of predicted params
             computed_np = computed.detach().cpu().numpy().copy()  # numpy copy of physics simulation output
 
@@ -225,7 +227,6 @@ def train(problem, bounds, data_path,
     with torch.no_grad():
         final_predictions = model(inputs)  # final predicted design params after training
         final_computed = problem.forward_physics(inputs, final_predictions)  # physics simulation output from final params
-
     # Return results as dict for dynamic unpacking (supports any problem type)
     result = {
         'model': model,
@@ -234,17 +235,18 @@ def train(problem, bounds, data_path,
         'targets': targets,
         'predictions': final_predictions,
         'computed_output': final_computed,
-        'epoch_results': epoch_results if isinstance(problem, VesselProblem) else None
+        'epoch_results': epoch_results, #if isinstance(problem, VesselProblem) else None
     }
     return result
-from physics.emtmd import EMTMDProblem
+
 # 6) Main: run indentation or vessel problem----------
 if __name__ == '__main__':
     # SELECT YOUR PHYSICS PROBLEM
     # Uncomment ONE of the following:
     # problem = IndentationProblem()          # Inverse indentation problem (default)
     # problem = VesselProblem()              # Pressure vessel optimization
-    problem = EMTMDProblem()                # Your custom physics problem
+    problem = EMTMDEHProblem()                # Efficiency maximization of EMTMD system
+    # problem = EMTMDProblem()                # H2 norm minimization of EMTMD system
 
     # Get bounds and data path dynamically from the problem
     bounds = problem.get_bounds()
@@ -256,7 +258,7 @@ if __name__ == '__main__':
 
     # TRAINING HYPERPARAMETERS - ADJUST TO CONTROL OPTIMIZATION
     patience = 100             # ← Early stopping: stop if loss doesn't improve for N epochs
-    tighten_epochs = 1500     # ← Maximum training epochs (upper bound on total epochs)
+    tighten_epochs = 10     # ← Maximum training epochs (upper bound on total epochs)
     stable_epochs = 6          # ← Stop if predictions stable for N consecutive epochs
     
     # How to tune based on results:
