@@ -81,6 +81,21 @@ def save_vessel_epoch_results_csv(epoch_results, output_dir):
             writer.writerow([epoch, pred[0], pred[1], pred[2], pred[3], pred[4], phys])
     print(f"Saved epoch results to {jobName}")
 
+def save_emtmd_epoch_results_csv(epoch_results, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    
+    jobName = os.path.join(output_dir, "epoch_results.csv")
+    
+    with open(jobName, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Epoch', 'L1','L2','L3','L4','L5','L6','L7','L8','L9','R1','R2','R3','R4','R5','R6','R7','R8','R9'])
+        for result in epoch_results:
+            epoch = result['epoch']
+            pred = result['predictions'][0]  # batch_size=1, get first (only) element
+            phys = np.linalg.norm(result['physics_output'])  # batch_size=1, get scalar
+            writer.writerow([epoch, pred[0], pred[1], pred[2], pred[3], pred[4], pred[5], pred[6], pred[7], pred[8], pred[9], pred[10], pred[11], pred[12], pred[13], pred[14], pred[15], pred[16], pred[17], phys])
+    print(f"Saved epoch results to {jobName}")
+
 def plot_force_indentation(δobs, Fobs, Fpred_full, output_dir):
     """
     Plot measured vs predicted force-indentation curve.
