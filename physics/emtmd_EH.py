@@ -6,7 +6,7 @@ import numpy as np
 import math
 
 
-class EMTMDProblem(PhysicsProblem):
+class EMTMDEHProblem(PhysicsProblem):
     def __init__(self):
         self._targets = None
         self._input_data = None
@@ -31,13 +31,13 @@ class EMTMDProblem(PhysicsProblem):
         ]
 
         # Bounds for each design parameter
-        self.bounds = [(1e-4, 1e-2), (1e-4, 1e-2), (1e-4, 1e-2), (1e-4, 1e-2), (1e-4, 1e-2), (1e-4, 1e-2), (1e-4, 1e-2), (1e-4, 1e-2), (1e-4, 1e-2),
-                       (1, 150), (1, 150), (1, 150), (1, 150), (1, 150), (1, 150), (1, 150), (1, 150), (1, 150)
+        self.bounds = [(1E-5, 3e-2), (1E-5, 3e-2), (1E-5, 3e-2), (1E-5, 3e-2), (1E-5, 3e-2), (1E-5, 3e-2), (1E-5, 3e-2), (1E-5, 3e-2), (1E-5, 3e-2),
+                       (1, 2500), (1, 2500), (1, 2500), (1, 2500), (1, 2500), (1, 2500), (1, 2500), (1, 2500), (1, 2500)
         ]
 
     def get_input_output_dims(self):
         input_dim = 1
-        output_dim = len(self.design_params)
+        output_dim = len(self.design_params) 
         return input_dim, output_dim
 
     def get_bounds(self):
@@ -48,33 +48,40 @@ class EMTMDProblem(PhysicsProblem):
 
     def load_data(self, path):
         inp = torch.zeros((1,1))
-        obs = torch.zeros((1,1))
+        obs = torch.ones((1,1))     # Maximum efficiency is set to 1
         return inp, obs
 
     def forward_physics(self, inputs, predictions):
-        output = self.compute_emtmd_response(predictions)
+        output = self.compute_emtmdeh_response(predictions)
         return output
 
-    def compute_emtmd_response(self, predictions):
+    def compute_emtmdeh_response(self, predictions):
         # Set pi for convenience
         p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15, p16, p17, p18 = predictions[:, 0], predictions[:, 1], predictions[:, 2], predictions[:, 3], predictions[:, 4], predictions[:, 5], predictions[:, 6], predictions[:, 7], predictions[:, 8], predictions[:, 9], predictions[:, 10], predictions[:, 11], predictions[:, 12], predictions[:, 13], predictions[:, 14], predictions[:, 15], predictions[:, 16], predictions[:, 17]
         # Set up the system matrices
-        # Clone the M, C, K matrices and F vector, increase their dimensions by 1 
+        # Clone the M, C, K matrices and F vector
         Cem_new = self.Cem.clone()
         Mem_new = self.Mem.clone()
         Kem_l = self.Kem.clone()
         Force_l = self.Force_vec.clone()
+        s_l = self.s.clone()
         # Create the diagonal matrices for L and R values to be added to the Mem and Cem matrices
         L_mat = (torch.diag(torch.cat( (p1, p2, p3, p4, p5, p6, p7, p8, p9)))).repeat(len(self.w_range),1,1)
         R_mat = (torch.diag(torch.cat( (p10, p11, p12, p13, p14, p15, p16, p17, p18)))).repeat(len(self.w_range),1,1)
         Cem_l = torch.cat((torch.cat((Cem_new, torch.zeros(len(self.w_range),109,9) ),2), torch.cat( (torch.zeros(len(self.w_range),9,109),R_mat) ,2 )),1)
         Mem_l = torch.cat((torch.cat((Mem_new, torch.zeros(len(self.w_range),109,9) ),2), torch.cat( (torch.zeros(len(self.w_range),9,109),L_mat) ,2 )),1)
         # Dynamic Stiffness Matrix
-        DSM = (Mem_l*self.s**2+Cem_l*self.s+Kem_l)
+        DSM = (Mem_l*s_l**2+Cem_l*s_l+Kem_l)
         # Solve the linear system
         H = torch.linalg.solve(DSM, Force_l)
-        # Output: H2 norm minimisation
-        output = torch.linalg.vector_norm(torch.abs(H[:,99,:]).squeeze(-1).squeeze(-1))
+        # RMS of the Generated Power in the Transducers (I^2*R/2)
+        genPower = torch.bmm(s_l**2,torch.bmm((H[:,-9:,:]).transpose(1,2), torch.bmm(R_mat.to(dtype=torch.complex64), (H[:,-9:,:]))))/2
+        # Input Mechanical Power (Force*Velocity)
+        inPower = torch.bmm(s_l,torch.matmul(H.transpose(1,2),Force_l))
+        # Measurement of the conversion of mechanical power to electrical power
+        # efficiency = torch.div(genPower,inPower)
+        # Output: The efficiency of the system to convert the mechanical power into electrical, over a frequency band
+        output = torch.linalg.vector_norm(torch.abs(torch.div(genPower,inPower)).squeeze(-1).squeeze(-1))/math.sqrt(len(self.w_range))
         return output
 
     def constraint_loss(self, predictions):
@@ -89,3 +96,4 @@ class EMTMDProblem(PhysicsProblem):
             save_emtmd_epoch_results_csv(epoch_results, output_dir)
 
         plot_loss_curves(history, output_dir)
+
