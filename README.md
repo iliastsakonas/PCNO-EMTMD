@@ -1,6 +1,6 @@
-# Physics-Guided Neural Network Inverse Design Pipeline
+# Physics-Constrained Neural Optimizer Inverse Design Pipeline
 
-A machine learning framework for inverse design problems using physics-informed neural networks (PINNs). This pipeline solves inverse problems by integrating domain-specific physics constraints directly into neural network training.
+A machine learning framework for inverse design problems using physics-constrained neural networks. This pipeline solves inverse problems by integrating domain-specific physics constraints directly into neural network training.
 
 ## Overview
 
@@ -31,6 +31,8 @@ This project provides a generic, extensible framework for physics-guided inverse
 │   ├── base.py                 # Abstract PhysicsProblem base class
 │   ├── indentation.py          # IndentationProblem implementation
 │   ├── vessel.py               # VesselProblem implementation
+│   ├── EMTMD_VC.py             # EMTMD_VC implementation
+│   ├── EMTMD_EH.py             # EMTMD_EH implementation
 │   └── [your_problem].py       # Add custom physics problems here ←
 ├── visualization/
 │   └── plotting.py             # Plotting and CSV export utilities
@@ -101,7 +103,7 @@ Where `ind` is indentation (mm) and `force` is load (mN).
 
 ## Model Architecture
 
-### PGNN (Physics-Guided Neural Network)
+### PCNO (Physics-Constrained Neural Optimizer)
 
 - **Input**: Problem-specific measurements (e.g., [force, indentation] for indentation problem)
 - **Output**: Material/design parameters (e.g., [E1, E2, E3] elastic moduli)
