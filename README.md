@@ -4,7 +4,7 @@ A machine learning framework for inverse design problems using physics-constrain
 
 ## Overview
 
-This project provides a generic, extensible framework for physics-guided inverse design. The current implementation targets the **inverse indentation problem**, estimating layered material elastic moduli (E1, E2, E3) from experimental force-displacement data, but the architecture supports any physics-constrained inverse problem.
+This project provides a generic, extensible framework for physics-constrained inverse design. The current implementation targets the **inverse EMTMD problems**, estimating the optimal parameters for the parameters of RL shunt circuits connected to piezoelectric elements for vibration control and energy harvesting purposes, but the architecture supports any physics-constrained inverse problem.
 
 ## Key Features
 
@@ -31,8 +31,8 @@ This project provides a generic, extensible framework for physics-guided inverse
 │   ├── base.py                 # Abstract PhysicsProblem base class
 │   ├── indentation.py          # IndentationProblem implementation
 │   ├── vessel.py               # VesselProblem implementation
-│   ├── EMTMD_VC.py             # EMTMD_VC implementation
-│   ├── EMTMD_EH.py             # EMTMD_EH implementation
+│   ├── EMTMD_VC.py             # EMTMDVCProblem implementation
+│   ├── EMTMD_EH.py             # EMTMDEHProblem implementation
 │   └── [your_problem].py       # Add custom physics problems here ←
 ├── visualization/
 │   └── plotting.py             # Plotting and CSV export utilities
@@ -49,7 +49,7 @@ This project provides a generic, extensible framework for physics-guided inverse
 
 ```bash
 git clone <repository-url>
-cd Physics-guided-Neural-Network-Inverse-Design-Pipeline
+cd PCNO-EMTMD
 ```
 
 ### Docker Setup
@@ -109,7 +109,7 @@ Where `ind` is indentation (mm) and `force` is load (mN).
 - **Output**: Material/design parameters (e.g., [E1, E2, E3] elastic moduli)
 - **Hidden layers**: Configurable (default 3 layers × 72 neurons)
 - **Normalization**: LayerNorm for single-sample problems, BatchNorm1d for batch problems
-- **Activation**: Tanh in hidden layers, bounded output via `CustomActivation` (tanh scaling to parameter ranges)
+- **Activation**: Softsign in hidden layers, bounded output via `CustomActivation` (Softsign scaling to parameter ranges)
 
 ### Physics Integration
 
