@@ -19,10 +19,10 @@ class EMTMDEHProblem(PhysicsProblem):
         self.w_range = range(500,12501,5)                                # Frequency range
         df = pd.read_csv('data/Mem.csv',header=None)
         self.Mem = torch.tensor(df.values, dtype=torch.complex64)         # Mass matrix of the electromechanical system (109x109): 
-        self.Mem = self.Mem                               # Inertia terms will be added later (Inductance
+                                                                        # Inertia terms will be added later (Inductance
         df = pd.read_csv('data/Cem.csv',header=None)
-        self.Cem = torch.tensor(df.values, dtype=torch.complex64)         # Damping matrix of the electromechanical system (109x190)
-        self.Cem = self.Cem                            # Damping terms will be added later (Resistance)
+        self.Cem = torch.tensor(df.values, dtype=torch.complex64)        # Damping matrix of the electromechanical system (109x190)
+                                                                        # Damping terms will be added later (Resistance)
         df = pd.read_csv('data/Kem.csv',header=None)
         self.Kem = torch.tensor(df.values, dtype=torch.complex64)         # Stiffness matrix of the electromechanical system (118x118)
         self.Kem = self.Kem.unsqueeze(0)
