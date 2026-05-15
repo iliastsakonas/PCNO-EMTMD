@@ -1,5 +1,5 @@
 """
-Physics-Guided Neural Network (PGNN) inverse design pipeline with:
+Physics-Constrained Neural Optimizer (PCNO) inverse design pipeline with:
   - Deterministic setup (fixed random seeds)
   - Cosine-annealed learning rate for exploration/exploitation
   - Constraint loss for enforcing parameter ordering/relationships
@@ -14,18 +14,17 @@ import numpy as np
 import torch  #Open-source machine learning library
 import torch.nn as nn
 import torch.optim as optim
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR
 import pandas as pd
 import math
-from scipy.optimize import curve_fit
 import os
 from physics.indentation import IndentationProblem
 from physics.vessel import VesselProblem
-from physics.emtmd_EH import EMTMDEHProblem
 from physics.emtmd import EMTMDProblem
+from physics.emtmd_EH import EMTMDEHProblem
+
 # Import visualization utilities
 from visualization.plotting import save_predictions_csv, save_vessel_design_csv, save_vessel_epoch_results_csv, plot_force_indentation, plot_loss_curves, evaluate_rank
-
 
 # Set output root directory from environment variable or default
 OUTPUT_ROOT = os.environ.get("OUTPUT_ROOT", "results")
@@ -46,12 +45,14 @@ class CustomActivation(nn.Module):
         super().__init__()
         self.out_min, self.out_max = out_min, out_max
     def forward(self, x):
-        # tanh in [-1,1] -> scale to [out_min, out_max]
-        return self.out_min + (self.out_max - self.out_min) * (torch.tanh(x) + 1) / 2
+        # softsign in [-1,1] -> scale to [out_min, out_max]
+        return self.out_min + (self.out_max - self.out_min) * ((x / (1 + torch.abs(x)) + 1) / 2)
+        # tanh in [-1,1] -> scale to [out_min, out_max]    
+        # return self.out_min + (self.out_max - self.out_min) * (torch.tanh(x) + 1) / 2
 
-class PGNN(nn.Module):
+class PCNO(nn.Module):
     """
-    Generic Physics-Guided NN with configurable input/output dims and bounds.
+    Generic Physics-Constrained NN with configurable input/output dims and bounds.
     - For indentation (forward): input_dim=2, output_dim=3
     - For inverse design: input_dim=1, output_dim=5 (maps target objective → design params)
     
@@ -66,16 +67,15 @@ class PGNN(nn.Module):
     """
     def __init__(self, input_dim, output_dim, bounds, num_hidden_layers=3, hidden_dim=72, use_layer_norm=False):
         super().__init__()
-
         layers = []
         prev = input_dim
-        for _ in range(num_hidden_layers):
+        for i in range(num_hidden_layers):
             layers.append(nn.Linear(prev, hidden_dim))
             if use_layer_norm:
                 layers.append(nn.LayerNorm(hidden_dim))
             else:
                 layers.append(nn.BatchNorm1d(hidden_dim))
-            layers.append(nn.Tanh())
+            layers.append(nn.Softsign())
             prev = hidden_dim
         layers.append(nn.Linear(hidden_dim, output_dim))
         self.hidden = nn.Sequential(*layers)
@@ -86,19 +86,22 @@ class PGNN(nn.Module):
         ])
 
     def forward(self, x):
-        raw = self.hidden(x)
+        raw = x
+        raw = self.hidden(raw)
         outputs = []
         for i in range(len(self.activations)):
-            activated = self.activations[i](raw[:, i].unsqueeze(1)).squeeze(1)  # one predicted parameter, squeezed into its allowed range ([out_min, out_max]) using tanh
+            activated = self.activations[i](raw[:, i].unsqueeze(1)).squeeze(1)  # one predicted parameter, squeezed into its allowed range ([out_min, out_max]) using softsign
             outputs.append(activated)
-        return torch.stack(outputs, dim=1)
+        out = torch.stack(outputs, dim=1)
+        return out
 
 def init_weights(m):
     """Xavier init for Linear, standard for BN."""
     if isinstance(m, nn.Linear):
-        gain = nn.init.calculate_gain('tanh')
-        std = gain * math.sqrt(2.0/(m.weight.size(0)+m.weight.size(1)))
-        nn.init.normal_(m.weight,0.,std)
+        # gain = nn.init.calculate_gain('tanh') # if activation function is tanh
+        gain = 1 # if activation function is softsign
+        std = gain * math.sqrt(2/(m.weight.size(1)+m.weight.size(0)))
+        nn.init.normal_(m.weight,0,std)
         if m.bias is not None:
             nn.init.zeros_(m.bias)
     elif isinstance(m, nn.BatchNorm1d):
@@ -129,14 +132,13 @@ def train(problem, bounds, data_path,
         problem: PhysicsProblem instance (Indentation or Vessel)
         bounds: List of (min, max) tuples for each output parameter
         data_path: Path to CSV file with training data
-        num_hidden_layers: Number of hidden layers in PGNN (default: 3)
+        num_hidden_layers: Number of hidden layers in PCNO (default: 3)
         hidden_dim: Size of each hidden layer (default: 72)
         patience: Epochs without improvement before early stopping (default: 250)
         tighten_epochs: Maximum training epochs (default: 1500)
         stable_epochs: Consecutive stable epochs before stopping (default: 6)
     """
     t0 = time.time()
-
     # Load data first to determine batch_size (needed to pick LayerNorm vs BatchNorm)
     inputs, targets = problem.load_data(data_path)  # targets = ground-truth data the model tries to match
     batch_size = inputs.shape[0]
@@ -144,13 +146,42 @@ def train(problem, bounds, data_path,
     input_dim, output_dim = problem.get_input_output_dims()
     # BatchNorm needs batch_size>1 to compute variance; use LayerNorm when batch_size=1
     use_layer_norm = (batch_size == 1)
-    model = PGNN(input_dim, output_dim, bounds, num_hidden_layers=num_hidden_layers, hidden_dim=hidden_dim, use_layer_norm=use_layer_norm)
-    model.apply(init_weights)
 
-    optimizer = optim.Adam(model.hidden.parameters(), lr=1e-3)
-    scheduler = CosineAnnealingLR(optimizer, T_max=tighten_epochs, eta_min=1e-5)
-    # eta_min controls the minimum learning rate: higher = warmer end (more exploration),
-    # lower = colder end (more refinement). Try 1e-4 or 1e-6 to adjust late-stage optimization.
+    model = PCNO(input_dim, output_dim, bounds, num_hidden_layers=num_hidden_layers, hidden_dim=hidden_dim, use_layer_norm=use_layer_norm)
+    model.apply(init_weights)
+    params = list(model.hidden.parameters())
+    optimizer = torch.optim.AdamW([
+        {"params": [p], "lr": 1.5E-2 if i < 50 else 5E-3, "weight_decay":0.001} # 2E-10 for VC, 1E-12 for EH
+       for i, p in enumerate(params)
+    ])
+
+    # Custom Cosine Annealing with Warm Restarts Scheduler
+    def lambda1(i):
+        def f(epoch):
+            milestone = 500 # 250 for VC, 1000 for EH
+            T_0 = milestone
+            T_cur = epoch%milestone
+            a = (epoch+1) // milestone
+            lrmaxthreshold = 0.1
+            if epoch < milestone:
+               return 1
+            if epoch < 2*milestone:
+                eta_min = 0.05
+                lr_max = 1
+                return eta_min+(lr_max-eta_min)*(1+math.cos(math.pi*T_cur/T_0))/2
+            else:
+                eta_min = 0.05
+                lr_max = 1-(a-1)*0.05
+                if lr_max<lrmaxthreshold:
+                    lr_max = lrmaxthreshold
+                    eta_min = lrmaxthreshold/100
+                return eta_min+(lr_max-eta_min)*(1+math.cos(math.pi*T_cur/T_0))/2
+        return f
+
+    scheduler = LambdaLR(
+        optimizer,
+        lr_lambda=[lambda1(i) for i in range(len(optimizer.param_groups))]
+    )
     history = {'total': [], 'data': [], 'constraint': []}
     epoch_results = []  # Store predictions and computed outputs for each epoch
     best_loss = float('inf')
@@ -158,6 +189,7 @@ def train(problem, bounds, data_path,
     stable_count = 0
     prev_rounded = None
     last_saved_predictions = None  # Track last saved prediction
+    printCond = True
 
     for epoch in range(1, tighten_epochs + 1):
         optimizer.zero_grad()
@@ -165,16 +197,15 @@ def train(problem, bounds, data_path,
         # constraint = penalty for violating parameter relationships
         total_loss, data_loss, constraint, predictions, computed = loss_fn(model, inputs, targets, problem, constraint_weight=1.0)
         total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        # if early saturation, consider clipping the gradients
+        # torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
         optimizer.step()
-        scheduler.step()
-
+        # scheduler.step()
         history['total'].append(total_loss.item())
         history['data'].append(data_loss.item())
-        history['constraint'].append(constraint.item())
-        
+        # history['constraint'].append(constraint.item())
         # Store epoch results for vessel problem - save if predictions changed or every 10 epochs
-        if isinstance(problem, VesselProblem) or isinstance(problem, EMTMDProblem) or isinstance(problem, EMTMDEHProblem):
+        if isinstance(problem, VesselProblem) or isinstance(problem, EMTMDEHProblem) or isinstance(problem, EMTMDProblem):
             predictions_np = predictions.detach().cpu().numpy().copy()  # numpy copy of predicted params
             computed_np = computed.detach().cpu().numpy().copy()  # numpy copy of physics simulation output
 
@@ -199,14 +230,21 @@ def train(problem, bounds, data_path,
         else:
             no_improvement += 1
 
-        # first-decimal stability early-stop
+        # stability early-stop
         param_means = predictions.mean(dim=0)  # average of each predicted parameter across the batch
-        rounded = torch.round(param_means * 10000) / 10000  # first decimal
-        if prev_rounded is not None and torch.all(rounded == prev_rounded):
-            stable_count += 1
+        if isinstance(problem, VesselProblem) or isinstance(problem, EMTMDEHProblem):
+            for i in range(18):
+                if i < 9:
+                    rounded[i] = torch.round(param_means * 1e5) / 1e5 # 5th decimal accuracy for inductances
+                else:
+                    rounded[i] = torch.round(param_means) # 0th decimal accuracy for resistances
         else:
-            stable_count = 0
-        prev_rounded = rounded
+            rounded = torch.round(param_means * 1000000) / 1000000
+            if prev_rounded is not None and torch.all(rounded == prev_rounded):
+                stable_count += 1
+            else:
+                stable_count = 0
+            prev_rounded = rounded
 
         # stopping conditions
         if no_improvement >= patience:
@@ -215,8 +253,16 @@ def train(problem, bounds, data_path,
         if stable_count >= stable_epochs:
             print(f"Stopped: params stable at {rounded.tolist()} for {stable_epochs} epochs")
             break
+        computed_np = computed.detach().cpu().numpy().copy()
+        if isinstance(problem, EMTMDEHProblem) and computed_np > 19.64 and printCond:
+            print(f"EMTMDEH target achieved at epoch {epoch} with computed value {computed_np:.4f}")
+            printCond = False
 
-        if epoch % 100 == 0:
+        if isinstance(problem, EMTMDProblem) and computed_np <= 4.1630 and printCond: #
+            print(f"Stopped: EMTMD target achieved at epoch {epoch} with computed value {computed_np:.4f}")
+            printCond = False
+
+        if epoch % 25 == 0:
             print(f"Epoch {epoch:4d}  | Params {rounded.tolist()}")
 
     elapsed = time.time() - t0
@@ -227,6 +273,7 @@ def train(problem, bounds, data_path,
     with torch.no_grad():
         final_predictions = model(inputs)  # final predicted design params after training
         final_computed = problem.forward_physics(inputs, final_predictions)  # physics simulation output from final params
+
     # Return results as dict for dynamic unpacking (supports any problem type)
     result = {
         'model': model,
@@ -235,9 +282,10 @@ def train(problem, bounds, data_path,
         'targets': targets,
         'predictions': final_predictions,
         'computed_output': final_computed,
-        'epoch_results': epoch_results, #if isinstance(problem, VesselProblem) else None
+        'epoch_results': epoch_results if isinstance(problem, VesselProblem) or isinstance(problem, EMTMDEHProblem) or isinstance(problem, EMTMDProblem) else None
     }
     return result
+
 
 # 6) Main: run indentation or vessel problem----------
 if __name__ == '__main__':
@@ -245,20 +293,22 @@ if __name__ == '__main__':
     # Uncomment ONE of the following:
     # problem = IndentationProblem()          # Inverse indentation problem (default)
     # problem = VesselProblem()              # Pressure vessel optimization
-    problem = EMTMDEHProblem()                # Efficiency maximization of EMTMD system
-    # problem = EMTMDProblem()                # H2 norm minimization of EMTMD system
+    problem = EMTMDProblem()               # EMTMD inverse design problem
+    # problem = EMTMDEHProblem()        # EMTMDEH inverse design problem
+    # problem = VesselProblem(alpha=50.0)
 
     # Get bounds and data path dynamically from the problem
     bounds = problem.get_bounds()
     data_path = problem.get_data_path() #objective value for each physics problem
     
     # NEURAL NETWORK ARCHITECTURE - TUNE THESE FOR YOUR PROBLEM
+    # 3x128 for VC, 3x256 for EH
     num_hidden_layers = 3       # ← Try: 2, 3, 4, 5 (more layers = more capacity)
-    hidden_dim = 72             # ← Try: 32, 64, 72, 128 (wider = more expressive)
+    hidden_dim = 128            # ← Try: 32, 64, 72, 128 (wider = more expressive)
 
     # TRAINING HYPERPARAMETERS - ADJUST TO CONTROL OPTIMIZATION
-    patience = 100             # ← Early stopping: stop if loss doesn't improve for N epochs
-    tighten_epochs = 10     # ← Maximum training epochs (upper bound on total epochs)
+    patience = 150             # ← Early stopping: stop if loss doesn't improve for N epochs
+    tighten_epochs = 2000    # ← Maximum training epochs (upper bound on total epochs)
     stable_epochs = 6          # ← Stop if predictions stable for N consecutive epochs
     
     # How to tune based on results:
