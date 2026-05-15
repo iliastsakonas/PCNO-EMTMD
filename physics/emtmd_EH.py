@@ -61,10 +61,7 @@ class EMTMDEHProblem(PhysicsProblem):
         return output
 
     def compute_emtmdeh_response(self, predictions):
-        #start_time = time.perf_counter()
-        # Set pi for convenience
         p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15, p16, p17, p18 = predictions[:, 0], predictions[:, 1], predictions[:, 2], predictions[:, 3], predictions[:, 4], predictions[:, 5], predictions[:, 6], predictions[:, 7], predictions[:, 8], predictions[:, 9], predictions[:, 10], predictions[:, 11], predictions[:, 12], predictions[:, 13], predictions[:, 14], predictions[:, 15], predictions[:, 16], predictions[:, 17]
-        #start_time = time.perf_counter()
         # Set up the system matrices
         Kem_l = self.Kem
         Force_l = self.Force_vec
@@ -76,17 +73,12 @@ class EMTMDEHProblem(PhysicsProblem):
         DSM = Mem_l*self.s**2+Cem_l*self.s+Kem_l
         H = (torch.linalg.solve(DSM, Force_l))
         # RMS of the Generated Power in the Transducers (I^2*R/2)
-        #genPower = torch.bmm(s_l**2,torch.bmm((H[:,-9:,:]).bT, torch.bmm(R_mat.to(dtype=torch.complex64), (H[:,-9:,:]))))/2
         genPower = (self.s**2*H[:,-9:,:].mH@R_mat.to(dtype = torch.complex64)@H[:,-9:,:]/2).squeeze(-1).squeeze(-1)
         # Input Mechanical Power (Force*Velocity)
         inPower = (self.s*H.mH@Force_l).squeeze(-1).squeeze(-1)
         # Measurement of the conversion of mechanical power to electrical power: Energy Harvesting Efficiency = genPower / inPower
-        # Output: Banded H2 norm of the energy harvesting efficiency
-        #output_np = torch.abs(torch.div(genPower,inPower)*100).detach().numpy()
-        #df = pd.DataFrame(output_np)
-        #df.to_csv("TestH.csv",index = False)
+        # Output: Banded norm of the energy harvesting efficiency
         output = torch.linalg.vector_norm(torch.abs(torch.div(genPower,inPower)*100)/math.sqrt(self.s.size()[0]))
-        print(output)
         return output
 
     def constraint_loss(self, predictions):
