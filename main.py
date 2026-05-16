@@ -151,14 +151,14 @@ def train(problem, bounds, data_path,
     model.apply(init_weights)
     params = list(model.hidden.parameters())
     optimizer = torch.optim.AdamW([
-        {"params": [p], "lr": 1.5E-2 if i < 50 else 5E-3, "weight_decay":0.001} # 2E-10 for VC, 1E-12 for EH
+        {"params": [p], "lr": 1E-3 if i < 50 else 1E-3, "weight_decay":0.001} # VC: 0.75e-1, EH: 1e-1 
        for i, p in enumerate(params)
     ])
 
     # Custom Cosine Annealing with Warm Restarts Scheduler
     def lambda1(i):
         def f(epoch):
-            milestone = 500 # 250 for VC, 1000 for EH
+            milestone = 250
             T_0 = milestone
             T_cur = epoch%milestone
             a = (epoch+1) // milestone
@@ -171,7 +171,7 @@ def train(problem, bounds, data_path,
                 return eta_min+(lr_max-eta_min)*(1+math.cos(math.pi*T_cur/T_0))/2
             else:
                 eta_min = 0.05
-                lr_max = 1-(a-1)*0.05
+                lr_max = 1-(a-2)*0.1
                 if lr_max<lrmaxthreshold:
                     lr_max = lrmaxthreshold
                     eta_min = lrmaxthreshold/100
@@ -197,10 +197,9 @@ def train(problem, bounds, data_path,
         # constraint = penalty for violating parameter relationships
         total_loss, data_loss, constraint, predictions, computed = loss_fn(model, inputs, targets, problem, constraint_weight=1.0)
         total_loss.backward()
-        # if early saturation, consider clipping the gradients
-        # torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
         optimizer.step()
-        # scheduler.step()
+        scheduler.step()
         history['total'].append(total_loss.item())
         history['data'].append(data_loss.item())
         # history['constraint'].append(constraint.item())
@@ -302,9 +301,8 @@ if __name__ == '__main__':
     data_path = problem.get_data_path() #objective value for each physics problem
     
     # NEURAL NETWORK ARCHITECTURE - TUNE THESE FOR YOUR PROBLEM
-    # 3x128 for VC, 3x256 for EH
-    num_hidden_layers = 3       # ← Try: 2, 3, 4, 5 (more layers = more capacity)
-    hidden_dim = 128            # ← Try: 32, 64, 72, 128 (wider = more expressive)
+    num_hidden_layers = 4       # ← Try: 2, 3, 4, 5 (more layers = more capacity)
+    hidden_dim = 48            # ← Try: 32, 64, 72, 128 (wider = more expressive)
 
     # TRAINING HYPERPARAMETERS - ADJUST TO CONTROL OPTIMIZATION
     patience = 150             # ← Early stopping: stop if loss doesn't improve for N epochs
